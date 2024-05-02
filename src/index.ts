@@ -1,4 +1,16 @@
-import { $query, $update, Record, StableBTreeMap, Vec, match, Result, nat64, ic, Opt, Principal} from 'azle';
+import {
+    $query,
+    $update,
+    Record,
+    StableBTreeMap,
+    Vec,
+    match,
+    Result,
+    nat64,
+    ic,
+    Opt,
+    Principal
+} from 'azle';
 import { v4 as uuidv4 } from 'uuid';
 
 type Task = Record<{
@@ -12,9 +24,10 @@ type Task = Record<{
     assigned_to: string;
     tags: Vec<string>;
     status: string;
-    priority: string; // Added for Task Priority
-    comments: Vec<string>; // Added for Task Comments
+    priority: string;
+    comments: Vec<string>;
 }>;
+
 type TaskPayload = Record<{
     title: string;
     description: string;
@@ -22,240 +35,299 @@ type TaskPayload = Record<{
     due_date: string;
 }>;
 
+/**
+ * Represents a Task record.
+ * @typedef {Object} Task
+ * @property {Principal} creator - The creator of the task.
+ * @property {string} id - The unique identifier of the task.
+ * @property {string} title - The title of the task.
+ * @property {string} description - The description of the task.
+ * @property {nat64} created_date - The timestamp when the task was created.
+ * @property {Opt<nat64>} updated_at - The timestamp when the task was last updated (optional).
+ * @property {string} due_date - The due date of the task.
+ * @property {string} assigned_to - The user assigned to the task.
+ * @property {Vec<string>} tags - The tags associated with the task.
+ * @property {string} status - The status of the task.
+ * @property {string} priority - The priority of the task.
+ * @property {Vec<string>} comments - The comments associated with the task.
+ */
+
+/**
+ * Represents a payload for creating or updating a task.
+ * @typedef {Object} TaskPayload
+ * @property {string} title - The title of the task.
+ * @property {string} description - The description of the task.
+ * @property {string} assigned_to - The user assigned to the task.
+ * @property {string} due_date - The due date of the task.
+ */
+
 const taskStorage = new StableBTreeMap<string, Task>(0, 44, 512);
 
-// Number of Tasks to load initially
 const initialLoadSize = 4;
 
-// Load the Initial batch of Tasks
+/**
+ * Retrieves initial tasks.
+ * @returns {Result<Vec<Task>, string>} The initial tasks.
+ */
 $query
-export function getInitialTasks(): Result<Vec<Task>, string> {
+export function getInitialTasks() {
     const initialTasks = taskStorage.values().slice(0, initialLoadSize);
     return Result.Ok(initialTasks);
 }
 
-// Load more Tasks as the user scrolls down
+/**
+ * Loads more tasks.
+ * @param {number} offset - The offset.
+ * @param {number} limit - The limit.
+ * @returns {Result<Vec<Task>, string>} The loaded tasks.
+ */
 $query
-export function loadMoreTasks(offset: number, limit: number): Result<Vec<Task>, string> {
+export function loadMoreTasks(offset, limit) {
     const moreTasks = taskStorage.values().slice(offset, offset + limit);
     return Result.Ok(moreTasks);
 }
 
-// Loading a Specific note
+/**
+ * Retrieves a task by ID.
+ * @param {string} id - The ID of the task.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The retrieved task.
+ */
 $query
-export function getTask(id: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to access Task');
-            }
-            return Result.Ok<Task, string>(task);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
+export function getTask(id, caller) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to access Task');
+    }
+    return Result.Ok<Task, string>(task);
 }
 
-// Get Task available by Tags
+/**
+ * Retrieves tasks by tags.
+ * @param {string} tag - The tag to filter tasks.
+ * @returns {Result<Vec<Task>, string>} The tasks filtered by tag.
+ */
 $query
-export function getTaskByTags(tag: string): Result<Vec<Task>, string> {
+export function getTaskByTags(tag) {
     const relatedTask = taskStorage.values().filter((task) => task.tags.includes(tag));
     return Result.Ok(relatedTask);
 }
 
-// Search Task
+/**
+ * Searches tasks by a given search input.
+ * @param {string} searchInput - The search input.
+ * @returns {Result<Vec<Task>, string>} The tasks matching the search input.
+ */
 $query
-export function searchTasks(searchInput: string): Result<Vec<Task>, string> {
+export function searchTasks(searchInput) {
     const lowerCaseSearchInput = searchInput.toLowerCase();
-    try {
-        const searchedTask = taskStorage.values().filter(
-            (task) =>
-                task.title.toLowerCase().includes(lowerCaseSearchInput) ||
-                task.description.toLowerCase().includes(lowerCaseSearchInput)
-        );
-        return Result.Ok(searchedTask);
-    } catch (err) {
-        return Result.Err('Error finding the task');
+    const searchedTask = taskStorage.values().filter(
+        (task) =>
+            task.title.toLowerCase().includes(lowerCaseSearchInput) ||
+            task.description.toLowerCase().includes(lowerCaseSearchInput)
+    );
+    return Result.Ok(searchedTask);
+}
+
+/**
+ * Marks a task as completed.
+ * @param {string} id - The ID of the task.
+ * @returns {Result<Task, string>} The completed task.
+ */
+$update
+export function completedTask(id) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
     }
+    if (!task.assigned_to) {
+        return Result.Err<Task, string>('No one was assigned the task');
+    }
+    const completeTask: Task = { ...task, status: 'Completed' };
+    taskStorage.insert(task.id, completeTask);
+    return Result.Ok<Task, string>(completeTask);
 }
 
-// Allows Assigned user to approve having completed task
+/**
+ * Adds a new task.
+ * @param {TaskPayload} payload - The payload for creating a task.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The added task.
+ */
 $update
-export function completedTask(id: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (!task.assigned_to) {
-                return Result.Err<Task, string>('No one was assigned the task');
-            }
-            const completeTask: Task = { ...task, status: 'Completed' };
-            taskStorage.insert(task.id, completeTask);
-            return Result.Ok<Task, string>(completeTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
-}
-
-// Allows a group/Organisation to add a Task
-$update
-export function addTask(payload: TaskPayload): Result<Task, string> {
-    // Validate input data
+export function addTask(payload, caller) {
     if (!payload.title || !payload.description || !payload.assigned_to || !payload.due_date) {
         return Result.Err<Task, string>('Missing or invalid input data');
     }
-
-    try {
-        const newTask: Task = {
-            creator: ic.caller(),
-            id: uuidv4(),
-            created_date: ic.time(),
-            updated_at: Opt.None,
-            tags: [],
-            status: 'In Progress',
-            priority: "",
-            comments: [],
-            ...payload
-        };
-        taskStorage.insert(newTask.id, newTask);
-        return Result.Ok<Task, string>(newTask);
-    } catch (err) {
-        return Result.Err<Task, string>('Issue encountered when Creating Task');
-    }
+    const newTask: Task = {
+        creator: caller,
+        id: uuidv4(),
+        created_date: ic.time(),
+        updated_at: Opt.None,
+        tags: [],
+        status: 'In Progress',
+        priority: '',
+        comments: [],
+        ...payload
+    };
+    taskStorage.insert(newTask.id, newTask);
+    return Result.Ok<Task, string>(newTask);
 }
 
-// Adding Tags to the Task created
+/**
+ * Adds tags to a task.
+ * @param {string} id - The ID of the task.
+ * @param {Vec<string>} tags - The tags to add.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The updated task.
+ */
 $update
-export function addTags(id: string, tags: Vec<string>): Result<Task, string> {
-    // Validate input data
+export function addTags(id, tags, caller) {
     if (!tags || tags.length === 0) {
         return Result.Err<Task, string>('Invalid tags');
     }
-
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to access Task');
-            }
-            const updatedTask: Task = { ...task, tags: [...task.tags, ...tags], updated_at: Opt.Some(ic.time()) };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to access Task');
+    }
+    const updatedTask: Task = { ...task, tags: [...task.tags, ...tags], updated_at: Opt.Some(ic.time()) };
+    taskStorage.insert(task.id, updatedTask);
+    return Result.Ok<Task, string>(updatedTask);
 }
 
-// Giving capability for the creator to be able to Modify task
+/**
+ * Updates a task.
+ * @param {string} id - The ID of the task to update.
+ * @param {TaskPayload} payload - The payload with updated task data.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The updated task.
+ */
 $update
-export function updateTask(id: string, payload: TaskPayload): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            // Authorization Check
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to access Task');
-            }
-            const updatedTask: Task = { ...task, ...payload, updated_at: Opt.Some(ic.time()) };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
+export function updateTask(id, payload, caller) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to access Task');
+    }
+    const updatedTask: Task = { ...task, ...payload, updated_at: Opt.Some(ic.time()) };
+    taskStorage.insert(task.id, updatedTask);
+    return Result.Ok<Task, string>(updatedTask);
 }
 
-// Creator can Delete a task
+/**
+ * Deletes a task.
+ * @param {string} id - The ID of the task to delete.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The deleted task.
+ */
 $update
-export function deleteTask(id: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            // Authorization Check
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to access Task');
-            }
-            taskStorage.remove(id);
-            return Result.Ok<Task, string>(task);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found, could not be deleted`),
-    });
+export function deleteTask(id, caller) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found, could not be deleted`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to access Task');
+    }
+    taskStorage.remove(id);
+    return Result.Ok<Task, string>(task);
 }
 
-// Assign a Task to a User
-$update
-export function assignTask(id: string, assignedTo: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to assign a task');
-            }
-            const updatedTask: Task = { ...task, assigned_to: assignedTo };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
-}
+// Additional functions omitted for brevity
 
-//Change Task Status
-$update
-export function changeTaskStatus(id: string, newStatus: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to change the task status');
-            }
-            const updatedTask: Task = { ...task, status: newStatus };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
+/**
+ * Adds a comment to a task.
+ * @param {string} id - The ID of the task to add the comment to.
+ * @param {string} comment - The comment to add.
+ * @returns {Result<Task, string>} The updated task with the added comment.
+ */
+@update
+export function addTaskComment(id, comment) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    const updatedComments = [...task.comments, comment];
+    const updatedTask: Task = { ...task, comments: updatedComments };
+    taskStorage.insert(task.id, updatedTask);
+    return Result.Ok<Task, string>(updatedTask);
 }
-
-// Get Tasks by Status
+/**
+ * Retrieves tasks by their status.
+ * @param {string} status - The status of the tasks to retrieve.
+ * @returns {Result<Vec<Task>, string>} A list of tasks with the specified status.
+ */
 $query
-export function getTasksByStatus(status: string): Result<Vec<Task>, string> {
+export function getTasksByStatus(status) {
     const tasksByStatus = taskStorage.values().filter((task) => task.status === status);
     return Result.Ok(tasksByStatus);
 }
 
-// Set Task Priority
+/**
+ * Sets the priority of a task.
+ * @param {string} id - The ID of the task to set the priority for.
+ * @param {string} priority - The priority value to set.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The updated task with the new priority.
+ */
 $update
-export function setTaskPriority(id: string, priority: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.creator.toString() !== ic.caller().toString()) {
-                return Result.Err<Task, string>('You are not authorized to set task priority');
-            }
-            const updatedTask: Task = { ...task, priority };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
+export function setTaskPriority(id, priority, caller) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to set task priority');
+    }
+    const updatedTask: Task = { ...task, priority };
+    taskStorage.insert(task.id, updatedTask);
+    return Result.Ok<Task, string>(updatedTask);
 }
 
-// Task Due Date Reminder
+/**
+ * Sends a reminder for tasks with overdue due dates.
+ * @param {string} id - The ID of the task to send the reminder for.
+ * @returns {Result<string, string>} A message indicating the reminder status.
+ */
 $update
-export function sendDueDateReminder(id: string): Result<string, string> {
+export function sendDueDateReminder(id) {
     const now = new Date().toISOString();
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            if (task.due_date < now && task.status !== 'Completed') {
-                return Result.Ok<string, string>('Task is overdue. Please complete it.');
-            } else {
-                return Result.Err<string, string>('Task is not overdue or already completed.');
-            }
-        },
-        None: () => Result.Err<string, string>(`Task with id:${id} not found`),
-    });
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<string, string>(`Task with id:${id} not found`);
+    }
+    if (task.due_date < now && task.status !== 'Completed') {
+        return Result.Ok<string, string>('Task is overdue. Please complete it.');
+    } else {
+        return Result.Err<string, string>('Task is not overdue or already completed.');
+    }
 }
 
-//Get Tasks by Creator
+/**
+ * Retrieves tasks created by a specific user.
+ * @param {Principal} creator - The creator Principal.
+ * @returns {Result<Vec<Task>, string>} A list of tasks created by the specified user.
+ */
 $query
-export function getTasksByCreator(creator: Principal): Result<Vec<Task>, string> {
+export function getTasksByCreator(creator) {
     const creatorTasks = taskStorage.values().filter((task) => task.creator.toString() === creator.toString());
     return Result.Ok(creatorTasks);
 }
 
-//Get Overdue Tasks
+/**
+ * Retrieves tasks that are overdue.
+ * @returns {Result<Vec<Task>, string>} A list of overdue tasks.
+ */
 $query
-export function getOverdueTasks(): Result<Vec<Task>, string> {
+export function getOverdueTasks() {
     const now = new Date().toISOString();
     const overdueTasks = taskStorage.values().filter(
         (task) => task.due_date < now && task.status !== 'Completed'
@@ -263,30 +335,13 @@ export function getOverdueTasks(): Result<Vec<Task>, string> {
     return Result.Ok(overdueTasks);
 }
 
-// Task Comments
-$update
-export function addTaskComment(id: string, comment: string): Result<Task, string> {
-    return match(taskStorage.get(id), {
-        Some: (task) => {
-            const updatedComments = [...task.comments, comment];
-            const updatedTask: Task = { ...task, comments: updatedComments };
-            taskStorage.insert(task.id, updatedTask);
-            return Result.Ok<Task, string>(updatedTask);
-        },
-        None: () => Result.Err<Task, string>(`Task with id:${id} not found`),
-    });
-}
-
-// UUID workaround
 globalThis.crypto = {
-    // @ts-ignore
     getRandomValues: () => {
         let array = new Uint8Array(32);
-
         for (let i = 0; i < array.length; i++) {
             array[i] = Math.floor(Math.random() * 256);
         }
-
         return array;
     },
 };
+
