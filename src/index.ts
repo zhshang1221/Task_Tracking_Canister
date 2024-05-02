@@ -260,6 +260,80 @@ export function addTaskComment(id, comment) {
     taskStorage.insert(task.id, updatedTask);
     return Result.Ok<Task, string>(updatedTask);
 }
+/**
+ * Retrieves tasks by their status.
+ * @param {string} status - The status of the tasks to retrieve.
+ * @returns {Result<Vec<Task>, string>} A list of tasks with the specified status.
+ */
+$query
+export function getTasksByStatus(status) {
+    const tasksByStatus = taskStorage.values().filter((task) => task.status === status);
+    return Result.Ok(tasksByStatus);
+}
+
+/**
+ * Sets the priority of a task.
+ * @param {string} id - The ID of the task to set the priority for.
+ * @param {string} priority - The priority value to set.
+ * @param {Principal} caller - The caller Principal.
+ * @returns {Result<Task, string>} The updated task with the new priority.
+ */
+$update
+export function setTaskPriority(id, priority, caller) {
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<Task, string>(`Task with id:${id} not found`);
+    }
+    if (task.creator.toString() !== caller.toString()) {
+        return Result.Err<Task, string>('You are not authorized to set task priority');
+    }
+    const updatedTask: Task = { ...task, priority };
+    taskStorage.insert(task.id, updatedTask);
+    return Result.Ok<Task, string>(updatedTask);
+}
+
+/**
+ * Sends a reminder for tasks with overdue due dates.
+ * @param {string} id - The ID of the task to send the reminder for.
+ * @returns {Result<string, string>} A message indicating the reminder status.
+ */
+$update
+export function sendDueDateReminder(id) {
+    const now = new Date().toISOString();
+    const task = taskStorage.get(id);
+    if (!task) {
+        return Result.Err<string, string>(`Task with id:${id} not found`);
+    }
+    if (task.due_date < now && task.status !== 'Completed') {
+        return Result.Ok<string, string>('Task is overdue. Please complete it.');
+    } else {
+        return Result.Err<string, string>('Task is not overdue or already completed.');
+    }
+}
+
+/**
+ * Retrieves tasks created by a specific user.
+ * @param {Principal} creator - The creator Principal.
+ * @returns {Result<Vec<Task>, string>} A list of tasks created by the specified user.
+ */
+$query
+export function getTasksByCreator(creator) {
+    const creatorTasks = taskStorage.values().filter((task) => task.creator.toString() === creator.toString());
+    return Result.Ok(creatorTasks);
+}
+
+/**
+ * Retrieves tasks that are overdue.
+ * @returns {Result<Vec<Task>, string>} A list of overdue tasks.
+ */
+$query
+export function getOverdueTasks() {
+    const now = new Date().toISOString();
+    const overdueTasks = taskStorage.values().filter(
+        (task) => task.due_date < now && task.status !== 'Completed'
+    );
+    return Result.Ok(overdueTasks);
+}
 
 globalThis.crypto = {
     getRandomValues: () => {
